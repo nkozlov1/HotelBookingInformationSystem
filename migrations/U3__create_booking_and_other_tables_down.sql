@@ -1,0 +1,14 @@
+DROP TABLE IF EXISTS booking_additional_service CASCADE;
+DROP TABLE IF EXISTS additional_service CASCADE;
+DROP TABLE IF EXISTS review CASCADE;
+DROP TABLE IF EXISTS bonus_transaction CASCADE;
+DROP TABLE IF EXISTS bonus_account CASCADE;
+DROP TABLE IF EXISTS userpaymentmethod CASCADE;
+DROP TABLE IF EXISTS payment CASCADE;
+DROP TABLE IF EXISTS paymentmethod CASCADE;
+DROP TABLE IF EXISTS bookingstatushistory CASCADE;
+DROP TABLE IF EXISTS booking CASCADE;
+
+DROP TYPE IF EXISTS payment_status_enum;
+DROP TYPE IF EXISTS booking_status_enum;
+DROP TYPE IF EXISTS paid_enum;

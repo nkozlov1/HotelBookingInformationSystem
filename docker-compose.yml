@@ -1,0 +1,307 @@
+x-etcd-env: &etcd_env
+  ETCD_LISTEN_PEER_URLS: http://0.0.0.0:2380
+  ETCD_LISTEN_CLIENT_URLS: http://0.0.0.0:2379
+  ETCD_INITIAL_CLUSTER: etcd1=http://etcd1:2380,etcd2=http://etcd2:2380,etcd3=http://etcd3:2380
+  ETCD_INITIAL_CLUSTER_STATE: new
+  ETCD_INITIAL_CLUSTER_TOKEN: pgcluster
+  ETCD_ENABLE_V2: "true"
+
+x-patroni-env: &patroni_env
+  PATRONI_SCOPE: booking
+  PATRONI_NAMESPACE: /service/
+  PATRONI_ETCD_HOSTS: http://etcd1:2379,http://etcd2:2379,http://etcd3:2379
+  POSTGRES_PASSWORD: mypassword
+  PATRONI_SUPERUSER_USERNAME: myuser
+  PATRONI_SUPERUSER_PASSWORD: mypassword
+  PATRONI_REPLICATION_USERNAME: replicator
+  PATRONI_REPLICATION_PASSWORD: replicator
+  PATRONI_LOG_LEVEL: INFO
+
+
+services:
+  etcd1:
+    image: quay.io/coreos/etcd:v3.5.9
+    hostname: etcd1
+    container_name: etcd1
+    environment:
+      <<: *etcd_env
+      ETCD_ADVERTISE_CLIENT_URLS: http://etcd1:2379
+    command: etcd --name etcd1 --initial-advertise-peer-urls http://etcd1:2380
+    networks: [monitor]
+    volumes:
+      - etcd1-data:/etcd-data
+
+  etcd2:
+    image: quay.io/coreos/etcd:v3.5.9
+    hostname: etcd2
+    container_name: etcd2
+    environment:
+      <<: *etcd_env
+      ETCD_ADVERTISE_CLIENT_URLS: http://etcd2:2379
+    command: etcd --name etcd2 --initial-advertise-peer-urls http://etcd2:2380
+    networks: [monitor]
+    volumes:
+      - etcd2-data:/etcd-data
+
+  etcd3:
+    image: quay.io/coreos/etcd:v3.5.9
+    hostname: etcd3
+    container_name: etcd3
+    environment:
+      <<: *etcd_env
+      ETCD_ADVERTISE_CLIENT_URLS: http://etcd3:2379
+    command: etcd --name etcd3 --initial-advertise-peer-urls http://etcd3:2380
+    networks: [monitor]
+    volumes:
+      - etcd3-data:/etcd-data
+
+  haproxy:
+    build:
+      context: .
+      dockerfile: Dockerfile.haproxy
+    container_name: haproxy
+    hostname: haproxy
+    dns:
+      - 127.0.0.11
+    env_file: patroni.env
+    environment:
+      ETCDCTL_ENDPOINTS: http://etcd1:2379,http://etcd2:2379,http://etcd3:2379
+      PGUSER: myuser
+      PGPASSWORD: mypassword
+    volumes:
+      - ./haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro
+    ports:
+      - "5432:5000"
+      - "7700:7000"
+      - "5001:5001"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -q -h haproxy -p 5000 -U $${PGUSER}"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 60s
+    networks: [monitor]
+    depends_on:
+      patroni1:
+        condition: service_healthy
+      patroni2:
+        condition: service_healthy
+      patroni3:
+        condition: service_healthy
+
+
+  patroni1:
+    image: patroni
+    container_name: patroni1
+    hostname: patroni1
+    env_file: patroni.env
+    environment:
+      <<: *patroni_env
+      PATRONI_NAME: patroni1
+      PATRONI_RESTAPI_LISTEN: 0.0.0.0:8008
+      PATRONI_POSTGRESQL_CONNECT_ADDRESS: patroni1:5432
+      PATRONI_POSTGRESQL_LISTEN: 0.0.0.0:5432
+    volumes:
+      - patroni1-data:/var/lib/postgresql/data
+    networks: [monitor]
+    healthcheck:
+      test: ["CMD", "curl", "-fs", "http://localhost:8008/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 30s
+    depends_on:
+      - etcd1
+      - etcd2
+      - etcd3
+
+  patroni2:
+    image: patroni
+    container_name: patroni2
+    hostname: patroni2
+    env_file: patroni.env
+    environment:
+      <<: *patroni_env
+      PATRONI_NAME: patroni2
+      PATRONI_RESTAPI_LISTEN: 0.0.0.0:8008
+      PATRONI_POSTGRESQL_CONNECT_ADDRESS: patroni2:5432
+      PATRONI_POSTGRESQL_LISTEN: 0.0.0.0:5432
+    volumes:
+      - patroni2-data:/var/lib/postgresql/data
+    networks: [monitor]
+    healthcheck:
+      test: ["CMD", "curl", "-fs", "http://localhost:8008/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 30s
+    depends_on:
+      - etcd1
+      - etcd2
+      - etcd3
+
+  patroni3:
+    image: patroni
+    container_name: patroni3
+    hostname: patroni3
+    env_file: patroni.env
+    environment:
+      <<: *patroni_env
+      PATRONI_NAME: patroni3
+      PATRONI_RESTAPI_LISTEN: 0.0.0.0:8008
+      PATRONI_POSTGRESQL_CONNECT_ADDRESS: patroni3:5432
+      PATRONI_POSTGRESQL_LISTEN: 0.0.0.0:5432
+    volumes:
+      - patroni3-data:/var/lib/postgresql/data
+    networks: [monitor]
+    healthcheck:
+      test: ["CMD", "curl", "-fs", "http://localhost:8008/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 30s
+    depends_on:
+      - etcd1
+      - etcd2
+      - etcd3
+
+  idem-test:
+    build:
+      context: .
+      dockerfile: idempotency/Dockerfile
+    networks: [monitor]
+    depends_on:
+      haproxy:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: ${DATABASE_URL}
+      MIGR_DIR: /migrations
+    volumes:
+      - ./migrations:/migrations:ro
+    command: ["test_idempotency.sh"]
+
+  flyway:
+    image: flyway/flyway:11.7.1
+    container_name: flyway-migrations
+    depends_on:
+      idem-test:
+        condition: service_completed_successfully
+    networks: [monitor]
+    environment:
+      FLYWAY_URL: jdbc:postgresql://haproxy:5001/postgres
+      FLYWAY_USER: myuser
+      FLYWAY_PASSWORD: mypassword
+      MIGRATION_VERSION: ${MIGRATION_VERSION:-latest}
+      ANALYST_NAMES: ${ANALYST_NAMES}
+      FLYWAY_PLACEHOLDERS_analyst_names: ${ANALYST_NAMES}
+    volumes:
+      - ./migrations:/flyway/sql
+    command: >
+      -target=${MIGRATION_VERSION:-latest}
+      migrate
+    restart: "no"
+
+  seeder:
+    build: ./seeder
+    container_name: seeder
+    profiles: ["seed"]
+    depends_on:
+      haproxy:
+        condition: service_healthy
+      flyway:
+        condition: service_completed_successfully
+    networks: 
+      - monitor
+    environment:
+      FLYWAY_URL: jdbc:postgresql://haproxy:5001/postgres
+      FLYWAY_USER: myuser
+      FLYWAY_PASSWORD: mypassword
+      APP_ENV: ${APP_ENV:-prod}
+      SEED_COUNT: ${SEED_COUNT:-50}
+    restart: "no"
+
+  pg_exporter:
+    image: quay.io/prometheuscommunity/postgres-exporter:v0.15.0
+    profiles: ["monitor"]
+    depends_on:
+      haproxy:
+        condition: service_healthy
+    environment:
+      DATA_SOURCE_NAME: postgres://myuser:mypassword@haproxy:5001/postgres?sslmode=disable
+      PG_EXPORTER_DISABLE_DEFAULT_METRICS: "false"
+      PG_EXPORTER_EXTEND_QUERY_PATH: /etc/postgres_exporter/queries.yaml
+    volumes:
+      - ./monitor/pg-exporter/queries.yaml:/etc/postgres_exporter/queries.yaml:ro
+    networks: [monitor]
+
+  prometheus:
+    image: prom/prometheus:v2.52.0
+    profiles: ["monitor"]
+    depends_on: [pg_exporter]
+    volumes:
+      - ./monitor/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prom_data:/prometheus
+    ports: ["9090:9090"]
+    networks: [monitor]
+
+  grafana:
+    image: grafana/grafana:10.4.2
+    profiles: ["monitor"]
+    depends_on: [prometheus]
+    environment:
+      GF_SECURITY_ADMIN_USER:     admin
+      GF_SECURITY_ADMIN_PASSWORD: admin
+    volumes:
+      - graf_data:/var/lib/grafana
+      - ./monitor/grafana/provisioning:/etc/grafana/provisioning
+      - ./monitor/grafana/dashboards:/var/lib/grafana/dashboards
+    ports: ["3000:3000"]
+    networks: [monitor]
+
+  loadtest:
+    build: ./loadtest
+    profiles: ["load"]
+    networks: [monitor]
+    environment:
+      PGHOST: haproxy
+      PGPORT: 5001      
+      PGUSER: myuser
+      PGPASSWORD: mypassword
+      PGDATABASE: postgres
+    depends_on:
+      flyway:
+        condition: service_completed_successfully
+    
+    
+  db_backup:
+    build: ./backup
+    profiles: ["db_backup"]
+    depends_on:
+      haproxy:
+        condition: service_healthy
+    environment:
+      POSTGRES_HOST: haproxy
+      POSTGRES_PORT: 5001
+      POSTGRES_DB: postgres
+      POSTGRES_USER: myuser
+      POSTGRES_PASSWORD: mypassword
+      BACKUP_DIR: /backups
+      BACKUP_RETENTION_COUNT: ${BACKUP_RETENTION_COUNT}
+      BACKUP_INTERVAL_CRON: ${BACKUP_INTERVAL_CRON}
+    volumes:
+      - ./backups:/backups
+    networks: [monitor]
+
+networks:
+  monitor:
+    name: monitor
+
+volumes:
+  etcd1-data:
+  etcd2-data:
+  etcd3-data:
+  patroni1-data:
+  patroni2-data:
+  patroni3-data:
+  prom_data:
+  graf_data:
